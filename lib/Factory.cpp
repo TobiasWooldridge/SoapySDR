@@ -128,6 +128,9 @@ SoapySDR::Device::DeviceCapabilities SoapySDR::Device::queryCapabilities(const s
  ******************************************************************/
 SoapySDR::KwargsList SoapySDR::Device::enumerate(const Kwargs &args, const long timeoutUs)
 {
+    //use default timeout if none specified to avoid blocking forever
+    const long effectiveTimeout = (timeoutUs <= 0) ? 10000000 : timeoutUs; //10 seconds default
+
     automaticLoadModules(); //perform one-shot load
 
     //enumerate cache data structure
@@ -164,7 +167,7 @@ SoapySDR::KwargsList SoapySDR::Device::enumerate(const Kwargs &args, const long 
         auto &cacheEntry = cache[std::make_pair(it.first, args)];
 
         //use the cache entry if its been initialized (valid) and not expired
-        if (cacheEntry.second.valid() && cacheEntry.first > std::chrono::high_resolution_clock::now())
+        if (cacheEntry.second.valid() && (cacheEntry.first + std::chrono::seconds(1)) > std::chrono::high_resolution_clock::now())
         {
             futures[it.first] = cacheEntry.second;
         }
@@ -172,17 +175,16 @@ SoapySDR::KwargsList SoapySDR::Device::enumerate(const Kwargs &args, const long 
         //otherwise create a new future and place it into the cache
         else
         {
-            const auto launchType = specifiedDriver?std::launch::deferred:std::launch::async;
-            futures[it.first] = std::async(launchType, it.second, args);
+            //always use async launch so wait_for() can timeout properly
+            //deferred launch causes wait_for() to return deferred status forever
+            futures[it.first] = std::async(std::launch::async, it.second, args);
             cacheEntry = std::make_pair(std::chrono::high_resolution_clock::now(), futures[it.first]);
         }
     }
 
-    //collect the asynchronous results with optional timeout
+    //collect the asynchronous results with timeout
     SoapySDR::KwargsList results;
-    const auto deadline = (timeoutUs > 0) ?
-        std::chrono::high_resolution_clock::now() + std::chrono::microseconds(timeoutUs) :
-        std::chrono::high_resolution_clock::time_point::max();
+    const auto deadline = std::chrono::high_resolution_clock::now() + std::chrono::microseconds(effectiveTimeout);
 
     for (auto &it : futures)
     {
@@ -195,32 +197,37 @@ SoapySDR::KwargsList SoapySDR::Device::enumerate(const Kwargs &args, const long 
 
         try
         {
-            //apply timeout if specified
-            if (timeoutUs > 0)
+            //poll with short intervals to allow cancellation and timeout
+            bool timedOut = false;
+            bool cancelled = false;
+            while (true)
             {
+                //check for cancellation
+                if (getCancelFlag().load())
+                {
+                    SoapySDR::logf(SOAPY_SDR_INFO, "SoapySDR::Device::enumerate() cancelled");
+                    cancelled = true;
+                    break;
+                }
+                //check for overall timeout
                 const auto now = std::chrono::high_resolution_clock::now();
                 if (now >= deadline)
                 {
                     SoapySDR::logf(SOAPY_SDR_WARNING, "SoapySDR::Device::enumerate(%s) timed out", it.first.c_str());
-                    continue;
+                    timedOut = true;
+                    break;
                 }
+                //wait for this future with short poll interval
                 const auto remaining = std::chrono::duration_cast<std::chrono::microseconds>(deadline - now);
-                //poll with short intervals to allow cancellation
                 const auto pollInterval = std::min(remaining, std::chrono::microseconds(100000)); //100ms max
-                if (it.second.wait_for(pollInterval) == std::future_status::timeout)
+                if (it.second.wait_for(pollInterval) == std::future_status::ready)
                 {
-                    //check cancellation during polling
-                    if (getCancelFlag().load())
-                    {
-                        SoapySDR::logf(SOAPY_SDR_INFO, "SoapySDR::Device::enumerate() cancelled");
-                        break;
-                    }
-                    //continue waiting if not cancelled and time remaining
-                    if (std::chrono::high_resolution_clock::now() < deadline) continue;
-                    SoapySDR::logf(SOAPY_SDR_WARNING, "SoapySDR::Device::enumerate(%s) timed out", it.first.c_str());
-                    continue;
+                    break; //future is ready, exit polling loop
                 }
+                //continue polling this same future
             }
+            if (cancelled) break; //break out of outer futures loop
+            if (timedOut) continue; //skip this future, try next
 
             for (auto handle : it.second.get())
             {
@@ -270,6 +277,9 @@ static SoapySDR::Device* getDeviceFromTable(const SoapySDR::Kwargs &args)
 
 SoapySDR::Device* SoapySDR::Device::make(const Kwargs &inputArgs, const long timeoutUs)
 {
+    //use default timeout if none specified to avoid blocking forever
+    const long effectiveTimeout = (timeoutUs <= 0) ? 30000000 : timeoutUs; //30 seconds default
+
     //check for cancellation before starting
     if (getCancelFlag().load())
     {
@@ -286,7 +296,7 @@ SoapySDR::Device* SoapySDR::Device::make(const Kwargs &inputArgs, const long tim
     //unlock the mutex to block on the enumeration call
     Kwargs discoveredArgs;
     lock.unlock();
-    const auto results = Device::enumerate(inputArgs, timeoutUs);
+    const auto results = Device::enumerate(inputArgs, effectiveTimeout);
     if (!results.empty()) discoveredArgs = results.front();
     lock.lock();
 
@@ -311,14 +321,17 @@ SoapySDR::Device* SoapySDR::Device::make(const Kwargs &inputArgs, const long tim
     }
 
     //search for a cache entry or launch a future if not found
-    std::map<Kwargs, std::shared_future<Device *>> cache;
+    //cache must be static to deduplicate concurrent make() calls
+    static std::map<Kwargs, std::shared_future<Device *>> cache;
     std::shared_future<Device *> deviceFuture;
     for (const auto &it : makeFunctions)
     {
         if (!specifiedDriver && it.first == "null") continue; //skip null unless explicitly specified
         if (specifiedDriver && hybridArgs.at("driver") != it.first) continue; //filter for driver match
         auto &cacheEntry = cache[discoveredArgs];
-        if (!cacheEntry.valid()) cacheEntry = std::async(std::launch::deferred, it.second, hybridArgs);
+        //use async launch so the driver make runs in background thread
+        //deferred launch causes wait_for() to return deferred status forever
+        if (!cacheEntry.valid()) cacheEntry = std::async(std::launch::async, it.second, hybridArgs);
         deviceFuture = cacheEntry;
         break;
     }
@@ -326,11 +339,10 @@ SoapySDR::Device* SoapySDR::Device::make(const Kwargs &inputArgs, const long tim
     //no match found for the arguments in the loop above
     if (!deviceFuture.valid()) throw std::runtime_error("SoapySDR::Device::make() no match");
 
-    //unlock the mutex to block on the factory call with optional timeout
+    //unlock the mutex to block on the factory call with timeout
     lock.unlock();
-    if (timeoutUs > 0)
     {
-        const auto deadline = std::chrono::high_resolution_clock::now() + std::chrono::microseconds(timeoutUs);
+        const auto deadline = std::chrono::high_resolution_clock::now() + std::chrono::microseconds(effectiveTimeout);
         while (true)
         {
             //check for cancellation
@@ -347,19 +359,6 @@ SoapySDR::Device* SoapySDR::Device::make(const Kwargs &inputArgs, const long tim
             }
             const auto pollInterval = std::min(remaining, std::chrono::microseconds(100000)); //100ms max
             const auto status = deviceFuture.wait_for(pollInterval);
-            if (status == std::future_status::ready) break;
-        }
-    }
-    else
-    {
-        //poll with short intervals to allow cancellation even without timeout
-        while (true)
-        {
-            if (getCancelFlag().load())
-            {
-                throw std::runtime_error("SoapySDR::Device::make() cancelled");
-            }
-            const auto status = deviceFuture.wait_for(std::chrono::milliseconds(100));
             if (status == std::future_status::ready) break;
         }
     }
