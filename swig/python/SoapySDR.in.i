@@ -31,6 +31,14 @@ See https://pothosware.github.io/SoapySDR/doxygen/latest/index.html for details.
 // https://docs.python.org/3/whatsnew/3.8.html#bpo-36085-whatsnew
 ////////////////////////////////////////////////////////////////////////
 %pythonbegin %{
+from __future__ import annotations
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from typing import Any, Sequence
+    import numpy as np
+    import numpy.typing as npt
+
 import os
 
 if os.name == 'nt' and hasattr(os, 'add_dll_directory'):
@@ -399,104 +407,140 @@ def extractBuffPointer(buff):
 
     %insert("python")
     %{
-        #manually unmake and flag for future calls and the deleter
-        def close(self):
-            try: getattr(self, '__closed__')
-            except AttributeError: Device.unmake(self)
+        def close(self) -> None:
+            """Manually unmake and flag for future calls and the deleter."""
+            try:
+                getattr(self, '__closed__')
+            except AttributeError:
+                Device.unmake(self)
             setattr(self, '__closed__', True)
 
-        def __del__(self): self.close()
+        def __del__(self) -> None:
+            self.close()
 
-        def __str__(self):
-            return "%s:%s"%(self.getDriverKey(), self.getHardwareKey())
+        def __str__(self) -> str:
+            return f"{self.getDriverKey()}:{self.getHardwareKey()}"
 
-        def __repr__(self):
-            return "%s:%s"%(self.getDriverKey(), self.getHardwareKey())
+        def __repr__(self) -> str:
+            return f"{self.getDriverKey()}:{self.getHardwareKey()}"
 
-        def getNativeStreamFormat(self, direction, chan):
-            r"""
-            Get the hardware's native stream format for this channel.
-            This is the format used by the underlying transport layer.
-            :type direction: int
-            :param direction: the channel direction RX or TX
-            :type chan: an available channel on the device
-            :rtype SoapySDR.NativeStreamFormat
-            :returns the native stream format and max possible value
+        def getNativeStreamFormat(self, direction: int, channel: int) -> "NativeStreamFormat":
             """
-            return self.__getNativeStreamFormat(direction, chan)
+            Get the hardware's native stream format for this channel.
 
-        def readStream(self, stream, buffs, numElems, flags = 0, timeoutUs = 100000):
-            r"""
+            This is the format used by the underlying transport layer.
+
+            Args:
+                direction: The channel direction (SOAPY_SDR_RX or SOAPY_SDR_TX).
+                channel: An available channel on the device.
+
+            Returns:
+                NativeStreamFormat with format string and fullScale value.
+            """
+            return self.__getNativeStreamFormat(direction, channel)
+
+        def readStream(
+            self,
+            stream: "Stream",
+            buffs: "Sequence[npt.NDArray[Any]]",
+            numElems: int,
+            flags: int = 0,
+            timeoutUs: int = 100000,
+        ) -> "StreamResult":
+            """
             Read elements from a stream for reception.
-            :type stream: SoapySDR.Stream
-            :param stream: SoapySDR stream handle
-            :type buffs: numpy.ndarray
-            :param buffs: a 2D NumPy array of the underlying stream type
-            :type numElems: int
-            :param numElems: the number of elements in each buffer
-            :type timeoutUs: int
-            :param timeoutUs: the timeout in microseconds
-            :rtype: SoapySDR.StreamResult
-            :returns the number of elements read per buffer, plus metadata
+
+            Args:
+                stream: SoapySDR stream handle.
+                buffs: List of NumPy arrays of the underlying stream type.
+                numElems: The number of elements to read per buffer.
+                flags: Optional input flags (default 0).
+                timeoutUs: Timeout in microseconds (default 100000).
+
+            Returns:
+                StreamResult with ret (samples read or error), flags, and timeNs.
             """
             ptrs = [extractBuffPointer(b) for b in buffs]
             return self.__readStream(stream, ptrs, numElems, flags, timeoutUs)
 
-        def writeStream(self, stream, buffs, numElems, flags = 0, timeNs = 0, timeoutUs = 100000):
-            r"""
+        def writeStream(
+            self,
+            stream: "Stream",
+            buffs: "Sequence[npt.NDArray[Any]]",
+            numElems: int,
+            flags: int = 0,
+            timeNs: int = 0,
+            timeoutUs: int = 100000,
+        ) -> "StreamResult":
+            """
             Write elements to a stream for transmission.
-            :type stream: SoapySDR.Stream
-            :param stream: SoapySDR stream handle
-            :type numElems: int
-            :param numElems: the number of elements in each buffer
-            :type flags: int
-            :param flags: optional input flags
-            :type timeNs: int
-            :param timeNs: the buffer's timestamp in nanoseconds
-            :type timeoutUs: int
-            :param timeoutUs: the timeout in microseconds
-            :rtype: SoapySDR.StreamResult
-            :returns the number of elements written per buffer, plus metadata
+
+            Args:
+                stream: SoapySDR stream handle.
+                buffs: List of NumPy arrays containing samples to transmit.
+                numElems: The number of elements to write per buffer.
+                flags: Optional input flags (default 0).
+                timeNs: Buffer timestamp in nanoseconds (default 0).
+                timeoutUs: Timeout in microseconds (default 100000).
+
+            Returns:
+                StreamResult with ret (samples written or error), flags, and timeNs.
             """
             ptrs = [extractBuffPointer(b) for b in buffs]
             return self.__writeStream(stream, ptrs, numElems, flags, timeNs, timeoutUs)
 
-        def readStreamStatus(self, stream, timeoutUs = 100000):
-            r"""
-            Readback status information about a stream. This call
-            is typically used on a transmit stream to report time
-            errors, underflows, and burst completion.
-            :type stream: SoapySDR.Stream
-            :param stream: SoapySDR stream handle
-            :type timeoutUs: int
-            :param timeoutUs: the timeout in microseconds
-            :rtype: SoapySDR.StreamResult
-            :returns any stream errors, plus other metadata
+        def readStreamStatus(
+            self,
+            stream: "Stream",
+            timeoutUs: int = 100000,
+        ) -> "StreamResult":
+            """
+            Read status information about a stream.
+
+            This is typically used on a transmit stream to report time errors,
+            underflows, and burst completion.
+
+            Args:
+                stream: SoapySDR stream handle.
+                timeoutUs: Timeout in microseconds (default 100000).
+
+            Returns:
+                StreamResult with any stream errors and metadata.
             """
             return self.__readStreamStatus(stream, timeoutUs)
 
-        def readStreamIntoBuffers(self, stream, buffs, flags = 0, timeoutUs = 100000):
-            r"""
-            Convenience method: Read elements from a stream directly into provided buffers.
-            This method auto-detects the number of elements from the buffer size.
+        def readStreamIntoBuffers(
+            self,
+            stream: "Stream",
+            buffs: "Sequence[npt.NDArray[Any]]",
+            flags: int = 0,
+            timeoutUs: int = 100000,
+        ) -> "StreamResult":
+            """
+            Read elements from a stream directly into provided buffers.
 
-            :type stream: SoapySDR.Stream
-            :param stream: SoapySDR stream handle
-            :type buffs: list of numpy.ndarray
-            :param buffs: list of NumPy arrays to receive samples (one per channel)
-            :type flags: int
-            :param flags: optional input flags
-            :type timeoutUs: int
-            :param timeoutUs: the timeout in microseconds (default 100000 = 100ms)
-            :rtype: SoapySDR.StreamResult
-            :returns StreamResult with ret (samples read or error code), flags, timeNs
+            This convenience method auto-detects the number of elements from
+            the buffer size.
 
-            Example:
+            Args:
+                stream: SoapySDR stream handle.
+                buffs: List of NumPy arrays to receive samples (one per channel).
+                flags: Optional input flags (default 0).
+                timeoutUs: Timeout in microseconds (default 100000).
+
+            Returns:
+                StreamResult with ret (samples read or error), flags, and timeNs.
+
+            Raises:
+                ValueError: If buffs is empty.
+
+            Example::
+
                 import numpy as np
                 buff = np.zeros(1024, dtype=np.complex64)
                 result = device.readStreamIntoBuffers(stream, [buff])
                 if result.ret > 0:
-                    samples = buff[:result.ret]  # Use actual samples read
+                    samples = buff[:result.ret]
             """
             if not buffs:
                 raise ValueError("buffs must contain at least one buffer")
@@ -504,128 +548,152 @@ def extractBuffPointer(buff):
             ptrs = [extractBuffPointer(b) for b in buffs]
             return self.__readStream(stream, ptrs, numElems, flags, timeoutUs)
 
-        def readStreamNumpy(self, stream, numSamples, format='CF32', numChannels=1, flags=0, timeoutUs=100000):
-            r"""
-            Convenience method: Read samples and return as NumPy array(s).
-            Allocates buffers automatically - useful for simple cases.
+        def readStreamNumpy(
+            self,
+            stream: "Stream",
+            numSamples: int,
+            format: str = "CF32",
+            numChannels: int = 1,
+            flags: int = 0,
+            timeoutUs: int = 100000,
+        ) -> "tuple[list[npt.NDArray[Any]], StreamResult]":
+            """
+            Read samples and return as NumPy array(s).
 
-            :type stream: SoapySDR.Stream
-            :param stream: SoapySDR stream handle
-            :type numSamples: int
-            :param numSamples: number of samples to read per channel
-            :type format: str
-            :param format: sample format ('CF32', 'CS16', 'CS8', 'CU8', 'F32', 'S16', etc.)
-            :type numChannels: int
-            :param numChannels: number of channels to read (default 1)
-            :type flags: int
-            :param flags: optional input flags
-            :type timeoutUs: int
-            :param timeoutUs: the timeout in microseconds (default 100000 = 100ms)
-            :rtype: tuple (list of numpy.ndarray, SoapySDR.StreamResult)
-            :returns tuple of (buffers, result) where buffers contains the sample data
+            This convenience method allocates buffers automatically.
 
-            Example:
-                buffers, result = device.readStreamNumpy(stream, 1024, 'CF32')
+            Args:
+                stream: SoapySDR stream handle.
+                numSamples: Number of samples to read per channel.
+                format: Sample format string (default "CF32").
+                    Supported: CF64, CF32, CS32, CS16, CS8, CU32, CU16, CU8,
+                    F64, F32, S32, S16, S8, U32, U16, U8.
+                numChannels: Number of channels to read (default 1).
+                flags: Optional input flags (default 0).
+                timeoutUs: Timeout in microseconds (default 100000).
+
+            Returns:
+                Tuple of (buffers, result) where buffers is a list of NumPy
+                arrays containing the sample data.
+
+            Raises:
+                ImportError: If NumPy is not installed.
+                ValueError: If format is not recognized.
+
+            Example::
+
+                buffers, result = device.readStreamNumpy(stream, 1024, "CF32")
                 if result.ret > 0:
                     samples = buffers[0][:result.ret]
-                    # Process samples...
             """
             try:
                 import numpy as np
             except ImportError:
-                raise ImportError("readStreamNumpy requires NumPy. Install with: pip install numpy")
+                raise ImportError(
+                    "readStreamNumpy requires NumPy. Install with: pip install numpy"
+                )
 
-            # Map format strings to NumPy dtypes
-            format_map = {
-                'CF64': np.complex128,
-                'CF32': np.complex64,
-                'CS32': np.dtype([('re', np.int32), ('im', np.int32)]),
-                'CS16': np.dtype([('re', np.int16), ('im', np.int16)]),
-                'CS8': np.dtype([('re', np.int8), ('im', np.int8)]),
-                'CU32': np.dtype([('re', np.uint32), ('im', np.uint32)]),
-                'CU16': np.dtype([('re', np.uint16), ('im', np.uint16)]),
-                'CU8': np.dtype([('re', np.uint8), ('im', np.uint8)]),
-                'F64': np.float64,
-                'F32': np.float32,
-                'S32': np.int32,
-                'S16': np.int16,
-                'S8': np.int8,
-                'U32': np.uint32,
-                'U16': np.uint16,
-                'U8': np.uint8,
+            format_map: dict[str, np.dtype[Any]] = {
+                "CF64": np.dtype(np.complex128),
+                "CF32": np.dtype(np.complex64),
+                "CS32": np.dtype([("re", np.int32), ("im", np.int32)]),
+                "CS16": np.dtype([("re", np.int16), ("im", np.int16)]),
+                "CS8": np.dtype([("re", np.int8), ("im", np.int8)]),
+                "CU32": np.dtype([("re", np.uint32), ("im", np.uint32)]),
+                "CU16": np.dtype([("re", np.uint16), ("im", np.uint16)]),
+                "CU8": np.dtype([("re", np.uint8), ("im", np.uint8)]),
+                "F64": np.dtype(np.float64),
+                "F32": np.dtype(np.float32),
+                "S32": np.dtype(np.int32),
+                "S16": np.dtype(np.int16),
+                "S8": np.dtype(np.int8),
+                "U32": np.dtype(np.uint32),
+                "U16": np.dtype(np.uint16),
+                "U8": np.dtype(np.uint8),
             }
 
             if format not in format_map:
-                raise ValueError(f"Unknown format '{format}'. Supported: {list(format_map.keys())}")
+                raise ValueError(
+                    f"Unknown format '{format}'. Supported: {list(format_map.keys())}"
+                )
 
             dtype = format_map[format]
             buffs = [np.zeros(numSamples, dtype=dtype) for _ in range(numChannels)]
             result = self.readStreamIntoBuffers(stream, buffs, flags, timeoutUs)
             return (buffs, result)
 
-        def getDirectBuffersInfo(self, stream):
-            r"""
+        def getDirectBuffersInfo(self, stream: "Stream") -> tuple[int, int]:
+            """
             Get information about available direct access buffers.
+
             This is useful for zero-copy streaming when supported by the driver.
 
-            :type stream: SoapySDR.Stream
-            :param stream: SoapySDR stream handle
-            :rtype: tuple (int, int)
-            :returns (numBuffers, bufferSize) or (0, 0) if not supported
+            Args:
+                stream: SoapySDR stream handle.
 
-            Example:
-                numBuffers, bufferSize = device.getDirectBuffersInfo(stream)
-                if numBuffers > 0:
+            Returns:
+                Tuple of (numBuffers, bufferSize), or (0, 0) if not supported.
+
+            Example::
+
+                num_buffers, buffer_size = device.getDirectBuffersInfo(stream)
+                if num_buffers > 0:
                     # Can use direct buffer access
                     pass
             """
-            numBuffers = self.getNumDirectAccessBuffers(stream)
+            numBuffers: int = self.getNumDirectAccessBuffers(stream)
             if numBuffers == 0:
                 return (0, 0)
-            # Estimate buffer size from MTU
-            bufferSize = self.getStreamMTU(stream)
+            bufferSize: int = self.getStreamMTU(stream)
             return (numBuffers, bufferSize)
 
-        def hasDirectBufferAccess(self, stream):
-            r"""
+        def hasDirectBufferAccess(self, stream: "Stream") -> bool:
+            """
             Check if the stream supports direct buffer access (zero-copy).
 
-            :type stream: SoapySDR.Stream
-            :param stream: SoapySDR stream handle
-            :rtype: bool
-            :returns True if direct buffer access is available
+            Args:
+                stream: SoapySDR stream handle.
+
+            Returns:
+                True if direct buffer access is available.
             """
             return self.getNumDirectAccessBuffers(stream) > 0
 
-        def readStreamDirect(self, stream, timeoutUs=100000):
-            r"""
+        def readStreamDirect(
+            self,
+            stream: "Stream",
+            timeoutUs: int = 100000,
+        ) -> "tuple[int, list[Any], int, int, int] | None":
+            """
             Acquire a read buffer directly from the stream (zero-copy).
+
             The returned buffer is valid until releaseReadBuffer is called.
 
-            :type stream: SoapySDR.Stream
-            :param stream: SoapySDR stream handle
-            :type timeoutUs: int
-            :param timeoutUs: timeout in microseconds
-            :rtype: tuple (handle, buffers, numSamples, flags, timeNs) or None
-            :returns buffer info or None if not supported/timeout
+            Args:
+                stream: SoapySDR stream handle.
+                timeoutUs: Timeout in microseconds (default 100000).
 
-            Example:
+            Returns:
+                Tuple of (handle, buffers, numSamples, flags, timeNs) on success,
+                or None if not supported or timeout occurred.
+
+            Example::
+
                 result = device.readStreamDirect(stream)
-                if result:
-                    handle, buffers, numSamples, flags, timeNs = result
+                if result is not None:
+                    handle, buffers, num_samples, flags, time_ns = result
                     # Process buffers directly (zero-copy)
                     device.releaseReadBuffer(stream, handle)
             """
-            numBuffs = self.getNumDirectAccessBuffers(stream)
+            numBuffs: int = self.getNumDirectAccessBuffers(stream)
             if numBuffs == 0:
                 return None
-            # Call the C++ acquireReadBuffer through the wrapped interface
             try:
                 result = self._Device__acquireReadBuffer(stream, timeoutUs)
                 if result.ret > 0:
                     return (result.handle, result.buffs, result.ret, result.flags, result.timeNs)
                 return None
-            except:
+            except Exception:
                 return None
     %}
 };
