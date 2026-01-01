@@ -6,6 +6,7 @@
 #include <SoapySDR/Device.hpp>
 #include <SoapySDR/Formats.hpp>
 #include <cstdlib>
+#include <cmath> //std::abs
 #include <algorithm> //min/max/find
 
 SoapySDR::Device::~Device(void)
@@ -29,6 +30,24 @@ std::string SoapySDR::Device::getHardwareKey(void) const
 SoapySDR::Kwargs SoapySDR::Device::getHardwareInfo(void) const
 {
     return SoapySDR::Kwargs();
+}
+
+/*******************************************************************
+ * Health Check API
+ ******************************************************************/
+bool SoapySDR::Device::isResponsive(void) const
+{
+    return true; // Default implementation assumes device is responsive
+}
+
+SoapySDR::Device::HealthStatus SoapySDR::Device::getHealth(void) const
+{
+    HealthStatus status;
+    status.responsive = true;
+    status.state = "unknown";
+    status.message = "";
+    status.lastSuccessfulOpTime = 0;
+    return status;
 }
 
 /*******************************************************************
@@ -124,6 +143,33 @@ int SoapySDR::Device::readStreamStatus(Stream *, size_t &, int &, long long &, c
 }
 
 /*******************************************************************
+ * Overflow Recovery API
+ ******************************************************************/
+SoapySDR::Device::OverflowRecovery SoapySDR::Device::getOverflowRecovery(Stream *) const
+{
+    return OVERFLOW_UNKNOWN;
+}
+
+int SoapySDR::Device::resetStream(Stream *)
+{
+    return SOAPY_SDR_NOT_SUPPORTED;
+}
+
+/*******************************************************************
+ * Stream Statistics API
+ ******************************************************************/
+SoapySDR::Device::StreamStats SoapySDR::Device::getStreamStats(Stream *) const
+{
+    StreamStats stats = {};
+    return stats;
+}
+
+void SoapySDR::Device::resetStreamStats(Stream *)
+{
+    // Default implementation does nothing
+}
+
+/*******************************************************************
  * Direct buffer access API
  ******************************************************************/
 size_t SoapySDR::Device::getNumDirectAccessBuffers(Stream *)
@@ -169,9 +215,20 @@ void SoapySDR::Device::setAntenna(const int, const size_t, const std::string &)
     return;
 }
 
+void SoapySDR::Device::setAntennaPersistent(const int direction, const size_t channel, const std::string &name, const bool)
+{
+    //default implementation just calls setAntenna (persistence not supported)
+    this->setAntenna(direction, channel, name);
+}
+
 std::string SoapySDR::Device::getAntenna(const int, const size_t) const
 {
     return "";
+}
+
+bool SoapySDR::Device::getAntennaPersistent(const int, const size_t) const
+{
+    return false; //persistence not supported by default
 }
 
 /*******************************************************************
@@ -785,6 +842,255 @@ void SoapySDR::Device::writeSetting(const int, const size_t, const std::string &
 std::string SoapySDR::Device::readSetting(const int, const size_t, const std::string &) const
 {
     return "";
+}
+
+/*******************************************************************
+ * Setting Validation API
+ ******************************************************************/
+SoapySDR::Device::SettingValidation SoapySDR::Device::validateSetting(const std::string &key, const std::string &value) const
+{
+    SettingValidation result;
+    result.valid = true;
+    result.normalizedValue = value;
+    result.message = "";
+
+    //get setting info to determine constraints
+    const auto info = this->getSettingInfo(key);
+    if (info.key.empty())
+    {
+        result.valid = false;
+        result.message = "Unknown setting key: " + key;
+        return result;
+    }
+
+    //check options for enum-type settings
+    if (!info.options.empty())
+    {
+        result.allowedValues = info.options;
+        bool found = false;
+        for (const auto &opt : info.options)
+        {
+            if (opt == value)
+            {
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+        {
+            result.valid = false;
+            result.message = "Value '" + value + "' not in allowed options";
+            return result;
+        }
+    }
+
+    //check range for numeric settings
+    if (info.type == ArgInfo::INT || info.type == ArgInfo::FLOAT)
+    {
+        result.allowedRange = info.range;
+        try
+        {
+            double numVal = std::stod(value);
+            if (numVal < info.range.minimum())
+            {
+                result.valid = false;
+                result.normalizedValue = std::to_string(info.range.minimum());
+                result.message = "Value " + value + " below minimum " + std::to_string(info.range.minimum());
+            }
+            else if (numVal > info.range.maximum())
+            {
+                result.valid = false;
+                result.normalizedValue = std::to_string(info.range.maximum());
+                result.message = "Value " + value + " above maximum " + std::to_string(info.range.maximum());
+            }
+        }
+        catch (const std::exception &)
+        {
+            result.valid = false;
+            result.message = "Invalid numeric value: " + value;
+        }
+    }
+
+    return result;
+}
+
+SoapySDR::Device::SettingValidation SoapySDR::Device::validateSetting(const int direction, const size_t channel, const std::string &key, const std::string &value) const
+{
+    SettingValidation result;
+    result.valid = true;
+    result.normalizedValue = value;
+    result.message = "";
+
+    //get channel setting info
+    const auto info = this->getSettingInfo(direction, channel, key);
+    if (info.key.empty())
+    {
+        result.valid = false;
+        result.message = "Unknown channel setting key: " + key;
+        return result;
+    }
+
+    //check options for enum-type settings
+    if (!info.options.empty())
+    {
+        result.allowedValues = info.options;
+        bool found = false;
+        for (const auto &opt : info.options)
+        {
+            if (opt == value)
+            {
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+        {
+            result.valid = false;
+            result.message = "Value '" + value + "' not in allowed options";
+            return result;
+        }
+    }
+
+    //check range for numeric settings
+    if (info.type == ArgInfo::INT || info.type == ArgInfo::FLOAT)
+    {
+        result.allowedRange = info.range;
+        try
+        {
+            double numVal = std::stod(value);
+            if (numVal < info.range.minimum())
+            {
+                result.valid = false;
+                result.normalizedValue = std::to_string(info.range.minimum());
+                result.message = "Value " + value + " below minimum " + std::to_string(info.range.minimum());
+            }
+            else if (numVal > info.range.maximum())
+            {
+                result.valid = false;
+                result.normalizedValue = std::to_string(info.range.maximum());
+                result.message = "Value " + value + " above maximum " + std::to_string(info.range.maximum());
+            }
+        }
+        catch (const std::exception &)
+        {
+            result.valid = false;
+            result.message = "Invalid numeric value: " + value;
+        }
+    }
+
+    return result;
+}
+
+/*******************************************************************
+ * Setting Verification API
+ ******************************************************************/
+SoapySDR::Device::SettingVerification SoapySDR::Device::writeSettingVerified(const std::string &key, const std::string &value)
+{
+    SettingVerification result;
+    result.requested = value;
+    this->writeSetting(key, value);
+    result.actual = this->readSetting(key);
+    result.success = (result.requested == result.actual);
+    if (result.success)
+    {
+        result.message = "Setting applied successfully";
+    }
+    else
+    {
+        result.message = "Setting mismatch: requested '" + result.requested + "', got '" + result.actual + "'";
+    }
+    return result;
+}
+
+SoapySDR::Device::SettingVerification SoapySDR::Device::writeSettingVerified(const int direction, const size_t channel, const std::string &key, const std::string &value)
+{
+    SettingVerification result;
+    result.requested = value;
+    this->writeSetting(direction, channel, key, value);
+    result.actual = this->readSetting(direction, channel, key);
+    result.success = (result.requested == result.actual);
+    if (result.success)
+    {
+        result.message = "Setting applied successfully";
+    }
+    else
+    {
+        result.message = "Setting mismatch: requested '" + result.requested + "', got '" + result.actual + "'";
+    }
+    return result;
+}
+
+SoapySDR::Device::SettingVerification SoapySDR::Device::setFrequencyVerified(
+    const int direction,
+    const size_t channel,
+    const double frequency,
+    const Kwargs &args,
+    const double toleranceHz)
+{
+    SettingVerification result;
+    result.requested = std::to_string(frequency);
+    this->setFrequency(direction, channel, frequency, args);
+    double actual = this->getFrequency(direction, channel);
+    result.actual = std::to_string(actual);
+    double diff = std::abs(frequency - actual);
+    result.success = (diff <= toleranceHz);
+    if (result.success)
+    {
+        result.message = "Frequency set successfully";
+    }
+    else
+    {
+        result.message = "Frequency mismatch: requested " + result.requested + " Hz, got " + result.actual + " Hz (diff: " + std::to_string(diff) + " Hz)";
+    }
+    return result;
+}
+
+SoapySDR::Device::SettingVerification SoapySDR::Device::setSampleRateVerified(
+    const int direction,
+    const size_t channel,
+    const double rate,
+    const double tolerancePercent)
+{
+    SettingVerification result;
+    result.requested = std::to_string(rate);
+    this->setSampleRate(direction, channel, rate);
+    double actual = this->getSampleRate(direction, channel);
+    result.actual = std::to_string(actual);
+    double percentDiff = std::abs(rate - actual) / rate;
+    result.success = (percentDiff <= tolerancePercent);
+    if (result.success)
+    {
+        result.message = "Sample rate set successfully";
+    }
+    else
+    {
+        result.message = "Sample rate mismatch: requested " + result.requested + " S/s, got " + result.actual + " S/s";
+    }
+    return result;
+}
+
+SoapySDR::Device::SettingVerification SoapySDR::Device::setGainVerified(
+    const int direction,
+    const size_t channel,
+    const double gain,
+    const double tolerancedB)
+{
+    SettingVerification result;
+    result.requested = std::to_string(gain);
+    this->setGain(direction, channel, gain);
+    double actual = this->getGain(direction, channel);
+    result.actual = std::to_string(actual);
+    double diff = std::abs(gain - actual);
+    result.success = (diff <= tolerancedB);
+    if (result.success)
+    {
+        result.message = "Gain set successfully";
+    }
+    else
+    {
+        result.message = "Gain mismatch: requested " + result.requested + " dB, got " + result.actual + " dB";
+    }
+    return result;
 }
 
 /*******************************************************************

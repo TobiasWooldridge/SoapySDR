@@ -68,6 +68,25 @@ SOAPY_SDR_API SoapySDRKwargs *SoapySDRDevice_enumerate(const SoapySDRKwargs *arg
 SOAPY_SDR_API SoapySDRKwargs *SoapySDRDevice_enumerateStrArgs(const char *args, size_t *length);
 
 /*!
+ * Enumerate a list of available devices on the system with timeout.
+ * \param args device construction key/value argument filters
+ * \param timeoutUs timeout in microseconds (0 = no timeout)
+ * \param [out] length the number of elements in the result.
+ * \return a list of arguments strings, each unique to a device
+ */
+SOAPY_SDR_API SoapySDRKwargs *SoapySDRDevice_enumerateWithTimeout(const SoapySDRKwargs *args, const long timeoutUs, size_t *length);
+
+/*!
+ * Enumerate a list of available devices on the system with timeout.
+ * Markup format for args: "keyA=valA, keyB=valB".
+ * \param args a markup string of key/value argument filters
+ * \param timeoutUs timeout in microseconds (0 = no timeout)
+ * \param [out] length the number of elements in the result.
+ * \return a list of arguments strings, each unique to a device
+ */
+SOAPY_SDR_API SoapySDRKwargs *SoapySDRDevice_enumerateStrArgsWithTimeout(const char *args, const long timeoutUs, size_t *length);
+
+/*!
  * Make a new Device object given device construction args.
  * The device pointer will be stored in a table so subsequent calls
  * with the same arguments will produce the same device.
@@ -88,6 +107,30 @@ SOAPY_SDR_API SoapySDRDevice *SoapySDRDevice_make(const SoapySDRKwargs *args);
  * \return a pointer to a new Device object or null for error
  */
 SOAPY_SDR_API SoapySDRDevice *SoapySDRDevice_makeStrArgs(const char *args);
+
+/*!
+ * Make a new Device object given device construction args with timeout.
+ * The device pointer will be stored in a table so subsequent calls
+ * with the same arguments will produce the same device.
+ * For every call to make, there should be a matched call to unmake.
+ *
+ * \param args device construction key/value argument map
+ * \param timeoutUs timeout in microseconds (0 = no timeout)
+ * \return a pointer to a new Device object
+ */
+SOAPY_SDR_API SoapySDRDevice *SoapySDRDevice_makeWithTimeout(const SoapySDRKwargs *args, const long timeoutUs);
+
+/*!
+ * Make a new Device object given device construction args with timeout.
+ * The device pointer will be stored in a table so subsequent calls
+ * with the same arguments will produce the same device.
+ * For every call to make, there should be a matched call to unmake.
+ *
+ * \param args a markup string of key/value arguments
+ * \param timeoutUs timeout in microseconds (0 = no timeout)
+ * \return a pointer to a new Device object or null for error
+ */
+SOAPY_SDR_API SoapySDRDevice *SoapySDRDevice_makeStrArgsWithTimeout(const char *args, const long timeoutUs);
 
 /*!
  * Unmake or release a device object handle.
@@ -164,6 +207,45 @@ SOAPY_SDR_API char *SoapySDRDevice_getHardwareKey(const SoapySDRDevice *device);
  * \param device a pointer to a device instance
  */
 SOAPY_SDR_API SoapySDRKwargs SoapySDRDevice_getHardwareInfo(const SoapySDRDevice *device);
+
+/*******************************************************************
+ * Health Check API
+ ******************************************************************/
+
+/*!
+ * Structure containing detailed device health information.
+ */
+typedef struct
+{
+    bool responsive;        //!< True if device appears responsive
+    char *state;            //!< State: "ok", "disconnected", "error", "unknown" (caller must free)
+    char *message;          //!< Human-readable status message (caller must free)
+    double lastSuccessfulOpTime; //!< Timestamp of last successful operation (0 if unknown)
+} SoapySDRHealthStatus;
+
+/*!
+ * Check if the device is responsive.
+ * This is a quick health check that should complete within 100ms
+ * even if the device is hung.
+ * \param device a pointer to a device instance
+ * \return true if device appears responsive, false otherwise
+ */
+SOAPY_SDR_API bool SoapySDRDevice_isResponsive(const SoapySDRDevice *device);
+
+/*!
+ * Get detailed device health status.
+ * Provides more information than isResponsive() for debugging
+ * and monitoring purposes.
+ * \param device a pointer to a device instance
+ * \return SoapySDRHealthStatus structure (caller must free state and message strings)
+ */
+SOAPY_SDR_API SoapySDRHealthStatus SoapySDRDevice_getHealth(const SoapySDRDevice *device);
+
+/*!
+ * Free the strings in a SoapySDRHealthStatus structure.
+ * \param status pointer to the health status structure to clean up
+ */
+SOAPY_SDR_API void SoapySDRHealthStatus_clear(SoapySDRHealthStatus *status);
 
 /*******************************************************************
  * Channels API
@@ -455,6 +537,83 @@ SOAPY_SDR_API int SoapySDRDevice_readStreamStatus(SoapySDRDevice *device,
     int *flags,
     long long *timeNs,
     const long timeoutUs);
+
+/*******************************************************************
+ * Overflow Recovery API
+ ******************************************************************/
+
+/*!
+ * Overflow recovery behavior enumeration.
+ */
+typedef enum
+{
+    SOAPY_SDR_OVERFLOW_AUTO_RECOVER = 0,    //!< Driver handles it, just continue reading
+    SOAPY_SDR_OVERFLOW_RESET_REQUIRED = 1,  //!< Call resetStream() to recover
+    SOAPY_SDR_OVERFLOW_RESTART_REQUIRED = 2,//!< Full deactivate/activate cycle needed
+    SOAPY_SDR_OVERFLOW_UNKNOWN = 3          //!< Legacy/not specified
+} SoapySDROverflowRecovery;
+
+/*!
+ * Get the overflow recovery behavior for this stream.
+ * Applications can use this to determine what action to take
+ * when an overflow (SOAPY_SDR_OVERFLOW) is detected.
+ *
+ * \param device a pointer to a device instance
+ * \param stream the opaque pointer to a stream handle
+ * \return the overflow recovery behavior for this stream
+ */
+SOAPY_SDR_API SoapySDROverflowRecovery SoapySDRDevice_getOverflowRecovery(SoapySDRDevice *device, SoapySDRStream *stream);
+
+/*!
+ * Reset stream state after an overflow or error condition.
+ * This is a lightweight recovery mechanism that clears internal
+ * buffers and resets stream state without the overhead of a full
+ * deactivate/activate cycle.
+ *
+ * \param device a pointer to a device instance
+ * \param stream the opaque pointer to a stream handle
+ * \return 0 for success or SOAPY_SDR_NOT_SUPPORTED if not implemented
+ */
+SOAPY_SDR_API int SoapySDRDevice_resetStream(SoapySDRDevice *device, SoapySDRStream *stream);
+
+/*******************************************************************
+ * Stream Statistics API
+ ******************************************************************/
+
+/*!
+ * Structure containing streaming statistics.
+ */
+typedef struct
+{
+    unsigned long long samplesRead;     //!< Total samples read since activation
+    unsigned long long samplesWritten;  //!< Total samples written since activation
+    unsigned long long samplesDropped;  //!< Samples lost due to overflow or other issues
+    unsigned int overflowCount;         //!< Number of overflow events
+    unsigned int underflowCount;        //!< Number of underflow events
+    unsigned int errorCount;            //!< Number of other errors
+    double effectiveSampleRate;         //!< Measured actual sample rate (0 if unknown)
+    double streamActiveTime;            //!< Seconds since activateStream() (0 if unknown)
+} SoapySDRStreamStats;
+
+/*!
+ * Get streaming statistics for the given stream.
+ * This provides insight into stream health including sample counts,
+ * overflow/underflow events, and effective sample rate.
+ *
+ * \param device a pointer to a device instance
+ * \param stream the opaque pointer to a stream handle
+ * \return SoapySDRStreamStats structure with current statistics
+ */
+SOAPY_SDR_API SoapySDRStreamStats SoapySDRDevice_getStreamStats(SoapySDRDevice *device, SoapySDRStream *stream);
+
+/*!
+ * Reset streaming statistics for the given stream.
+ * Clears all counters back to zero.
+ *
+ * \param device a pointer to a device instance
+ * \param stream the opaque pointer to a stream handle
+ */
+SOAPY_SDR_API void SoapySDRDevice_resetStreamStats(SoapySDRDevice *device, SoapySDRStream *stream);
 
 /*******************************************************************
  * Direct buffer access API

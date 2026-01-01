@@ -92,6 +92,38 @@ SoapySDRKwargs SoapySDRDevice_getHardwareInfo(const SoapySDRDevice *device)
 }
 
 /*******************************************************************
+ * Health Check API
+ ******************************************************************/
+bool SoapySDRDevice_isResponsive(const SoapySDRDevice *device)
+{
+    __SOAPY_SDR_C_TRY
+    return device->isResponsive();
+    __SOAPY_SDR_C_CATCH_RET(false);
+}
+
+SoapySDRHealthStatus SoapySDRDevice_getHealth(const SoapySDRDevice *device)
+{
+    SoapySDRHealthStatus result = {false, nullptr, nullptr, 0.0};
+    __SOAPY_SDR_C_TRY
+    auto status = device->getHealth();
+    result.responsive = status.responsive;
+    result.state = strdup(status.state.c_str());
+    result.message = strdup(status.message.c_str());
+    result.lastSuccessfulOpTime = status.lastSuccessfulOpTime;
+    __SOAPY_SDR_C_CATCH_RET(result);
+    return result;
+}
+
+void SoapySDRHealthStatus_clear(SoapySDRHealthStatus *status)
+{
+    if (status == nullptr) return;
+    free(status->state);
+    free(status->message);
+    status->state = nullptr;
+    status->message = nullptr;
+}
+
+/*******************************************************************
  * Channels API
  ******************************************************************/
 int SoapySDRDevice_setFrontendMapping(SoapySDRDevice *device, const int direction, const char *mapping)
@@ -218,6 +250,60 @@ int SoapySDRDevice_readStreamStatus(SoapySDRDevice *device, SoapySDRStream *stre
     __SOAPY_SDR_C_TRY
     return device->readStreamStatus(reinterpret_cast<SoapySDR::Stream *>(stream), *chanMask, *flags, *timeNs, timeoutUs);
     __SOAPY_SDR_C_CATCH_RET(SOAPY_SDR_STREAM_ERROR);
+}
+
+/*******************************************************************
+ * Overflow Recovery API
+ ******************************************************************/
+SoapySDROverflowRecovery SoapySDRDevice_getOverflowRecovery(SoapySDRDevice *device, SoapySDRStream *stream)
+{
+    __SOAPY_SDR_C_TRY
+    auto recovery = device->getOverflowRecovery(reinterpret_cast<SoapySDR::Stream *>(stream));
+    return static_cast<SoapySDROverflowRecovery>(recovery);
+    __SOAPY_SDR_C_CATCH_RET(SOAPY_SDR_OVERFLOW_UNKNOWN);
+}
+
+int SoapySDRDevice_resetStream(SoapySDRDevice *device, SoapySDRStream *stream)
+{
+    __SOAPY_SDR_C_TRY
+    return device->resetStream(reinterpret_cast<SoapySDR::Stream *>(stream));
+    __SOAPY_SDR_C_CATCH_RET(SOAPY_SDR_STREAM_ERROR);
+}
+
+/*******************************************************************
+ * Stream Statistics API
+ ******************************************************************/
+SoapySDRStreamStats SoapySDRDevice_getStreamStats(SoapySDRDevice *device, SoapySDRStream *stream)
+{
+    SoapySDRStreamStats result = {};
+    __SOAPY_SDR_C_TRY
+    auto stats = device->getStreamStats(reinterpret_cast<SoapySDR::Stream *>(stream));
+    result.samplesRead = stats.samplesRead;
+    result.samplesWritten = stats.samplesWritten;
+    result.samplesDropped = stats.samplesDropped;
+    result.overflowCount = stats.overflowCount;
+    result.underflowCount = stats.underflowCount;
+    result.errorCount = stats.errorCount;
+    result.effectiveSampleRate = stats.effectiveSampleRate;
+    result.streamActiveTime = stats.streamActiveTime;
+    __SOAPY_SDR_C_CATCH_RET(result);
+    return result;
+}
+
+void SoapySDRDevice_resetStreamStats(SoapySDRDevice *device, SoapySDRStream *stream)
+{
+    try
+    {
+        device->resetStreamStats(reinterpret_cast<SoapySDR::Stream *>(stream));
+    }
+    catch (const std::exception &ex)
+    {
+        SoapySDRDevice_reportError(ex.what());
+    }
+    catch (...)
+    {
+        SoapySDRDevice_reportError("unknown");
+    }
 }
 
 /*******************************************************************

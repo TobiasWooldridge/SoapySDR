@@ -19,6 +19,8 @@
 #include <string>
 #include <complex>
 #include <cstddef> //size_t
+#include <cstdint> //uint64_t, uint32_t
+#include <future>
 
 namespace SoapySDR
 {
@@ -39,17 +41,109 @@ public:
     /*!
      * Enumerate a list of available devices on the system.
      * \param args device construction key/value argument filters
+     * \param timeoutUs timeout in microseconds (0 = no timeout, default)
      * \return a list of argument maps, each unique to a device
      */
-    static KwargsList enumerate(const Kwargs &args = Kwargs());
+    static KwargsList enumerate(const Kwargs &args = Kwargs(), const long timeoutUs = 0);
 
     /*!
      * Enumerate a list of available devices on the system.
      * Markup format for args: "keyA=valA, keyB=valB".
      * \param args a markup string of key/value argument filters
+     * \param timeoutUs timeout in microseconds (0 = no timeout, default)
      * \return a list of argument maps, each unique to a device
      */
-    static KwargsList enumerate(const std::string &args);
+    static KwargsList enumerate(const std::string &args, const long timeoutUs = 0);
+
+    /*!
+     * Asynchronously enumerate a list of available devices on the system.
+     * Returns immediately with a future that will hold the results.
+     * \param args device construction key/value argument filters
+     * \return a future containing a list of argument maps, each unique to a device
+     */
+    static std::future<KwargsList> enumerateAsync(const Kwargs &args = Kwargs());
+
+    /*!
+     * Asynchronously enumerate a list of available devices on the system.
+     * Returns immediately with a future that will hold the results.
+     * Markup format for args: "keyA=valA, keyB=valB".
+     * \param args a markup string of key/value argument filters
+     * \return a future containing a list of argument maps, each unique to a device
+     */
+    static std::future<KwargsList> enumerateAsync(const std::string &args);
+
+    /*!
+     * Cancel any in-progress enumerate operations.
+     * This allows applications to abort stuck enumeration from another thread.
+     * Pending enumerate calls will return with partial or empty results.
+     * Thread-safe: can be called from any thread.
+     */
+    static void cancelEnumerate(void);
+
+    /*!
+     * Cancel any in-progress make operations.
+     * This allows applications to abort stuck device creation from another thread.
+     * Pending make calls will throw an exception indicating cancellation.
+     * Thread-safe: can be called from any thread.
+     */
+    static void cancelMake(void);
+
+    /*!
+     * Check if operations are currently cancelled.
+     * \return true if cancel has been requested
+     */
+    static bool isCancelled(void);
+
+    /*!
+     * Clear the cancellation flag.
+     * Call this before starting new operations after a cancel.
+     */
+    static void clearCancel(void);
+
+    /*******************************************************************
+     * Pre-open Capability Query API
+     ******************************************************************/
+
+    /*!
+     * Device capabilities that can be queried without opening the device.
+     * This allows applications to filter devices before attempting to open them.
+     */
+    struct DeviceCapabilities
+    {
+        std::string driverKey;              //!< Driver name (e.g., "rtlsdr", "sdrplay")
+        std::string hardwareKey;            //!< Hardware identifier
+        size_t numRxChannels;               //!< Number of receive channels
+        size_t numTxChannels;               //!< Number of transmit channels
+        RangeList frequencyRange;           //!< Overall tunable frequency range
+        RangeList sampleRateRange;          //!< Available sample rates
+        std::vector<std::string> antennas;  //!< Available antenna names
+        std::vector<std::string> gains;     //!< Available gain element names
+        std::vector<std::string> streamFormats; //!< Supported stream formats
+        bool supportsAgc;                   //!< Whether AGC is supported
+        bool supportsFullDuplex;            //!< Whether full duplex is supported
+        Kwargs extraInfo;                   //!< Additional device-specific info
+    };
+
+    /*!
+     * Query device capabilities without fully opening the device.
+     * This is a lightweight alternative to make() for getting device info.
+     * The query may still need to briefly access the device but will
+     * release it immediately after gathering information.
+     *
+     * \param args device identification arguments (from enumerate)
+     * \param timeoutUs timeout in microseconds (0 = no timeout)
+     * \return DeviceCapabilities structure with device information
+     * \throws std::runtime_error if device cannot be queried
+     */
+    static DeviceCapabilities queryCapabilities(const Kwargs &args, const long timeoutUs = 0);
+
+    /*!
+     * Query device capabilities without fully opening the device.
+     * \param args a markup string of key/value arguments
+     * \param timeoutUs timeout in microseconds (0 = no timeout)
+     * \return DeviceCapabilities structure with device information
+     */
+    static DeviceCapabilities queryCapabilities(const std::string &args, const long timeoutUs = 0);
 
     /*!
      * Make a new Device object given device construction args.
@@ -58,9 +152,10 @@ public:
      * For every call to make, there should be a matched call to unmake.
      *
      * \param args device construction key/value argument map
+     * \param timeoutUs timeout in microseconds (0 = no timeout, default)
      * \return a pointer to a new Device object
      */
-    static Device *make(const Kwargs &args = Kwargs());
+    static Device *make(const Kwargs &args = Kwargs(), const long timeoutUs = 0);
 
     /*!
      * Make a new Device object given device construction args.
@@ -69,9 +164,10 @@ public:
      * For every call to make, there should be a matched call to unmake.
      *
      * \param args a markup string of key/value arguments
+     * \param timeoutUs timeout in microseconds (0 = no timeout, default)
      * \return a pointer to a new Device object
      */
-    static Device *make(const std::string &args);
+    static Device *make(const std::string &args, const long timeoutUs = 0);
 
     /*!
      * Unmake or release a device object handle.
@@ -139,6 +235,52 @@ public:
      * to help identify the instantiated device.
      */
     virtual Kwargs getHardwareInfo(void) const;
+
+    /*******************************************************************
+     * Health Check API
+     ******************************************************************/
+
+    /*!
+     * Structure containing detailed device health information.
+     */
+    struct HealthStatus
+    {
+        bool responsive;        //!< True if device appears responsive
+        std::string state;      //!< State: "ok", "disconnected", "error", "unknown"
+        std::string message;    //!< Human-readable status message
+        double lastSuccessfulOpTime; //!< Timestamp of last successful operation (0 if unknown)
+    };
+
+    /*!
+     * Check if the device is responsive.
+     * This is a quick health check that should complete within 100ms
+     * even if the device is hung. Use this for watchdog monitoring
+     * or to detect USB disconnection before attempting operations.
+     *
+     * The default implementation returns true (assumes device is ok).
+     * Drivers should override this to provide actual health checking
+     * such as USB presence detection, ping/heartbeat, or API service checks.
+     *
+     * \return true if device appears responsive, false otherwise
+     */
+    virtual bool isResponsive(void) const;
+
+    /*!
+     * Get detailed device health status.
+     * Provides more information than isResponsive() for debugging
+     * and monitoring purposes.
+     *
+     * The default implementation returns {true, "unknown", "", 0}.
+     *
+     * Possible state values:
+     * - "ok": Device is functioning normally
+     * - "disconnected": Device has been disconnected (USB unplug, network loss)
+     * - "error": Device is in an error state (firmware crash, API failure)
+     * - "unknown": Health status cannot be determined (driver doesn't support)
+     *
+     * \return HealthStatus structure with device health information
+     */
+    virtual HealthStatus getHealth(void) const;
 
     /*******************************************************************
      * Channels API
@@ -341,13 +483,30 @@ public:
      * When inactive, readStream() should implement the timeout
      * specified by the caller and return SOAPY_SDR_TIMEOUT.
      *
+     * **Timeout behavior specification:**
+     * - timeoutUs > 0: Block for at most timeoutUs microseconds waiting for data.
+     *   Returns SOAPY_SDR_TIMEOUT if no data becomes available within the timeout.
+     *   May return partial data if some but not all requested samples are available.
+     * - timeoutUs == 0: Non-blocking. Return immediately with available data,
+     *   or SOAPY_SDR_TIMEOUT if no data is available.
+     * - timeoutUs < 0: Block indefinitely until data is available.
+     *   Not recommended for production code as it may block forever if device hangs.
+     *
+     * **Driver implementation requirements:**
+     * - Drivers MUST honor the timeout parameter to prevent indefinite blocking.
+     * - If a driver cannot implement timeout (e.g., due to hardware limitations),
+     *   it should document this limitation clearly.
+     * - On timeout with no data: return SOAPY_SDR_TIMEOUT.
+     * - On timeout with partial data: return the number of samples read (> 0).
+     *
      * \param stream the opaque pointer to a stream handle
      * \param buffs an array of void* buffers num chans in size
      * \param numElems the number of elements in each buffer
      * \param flags optional flag indicators about the result
      * \param timeNs the buffer's timestamp in nanoseconds
-     * \param timeoutUs the timeout in microseconds
+     * \param timeoutUs the timeout in microseconds (see timeout behavior above)
      * \return the number of elements read per buffer or error code
+     *         (SOAPY_SDR_TIMEOUT, SOAPY_SDR_OVERFLOW, SOAPY_SDR_STREAM_ERROR, etc.)
      */
     virtual int readStream(
         Stream *stream,
@@ -368,13 +527,21 @@ public:
      * such that the call blocks until space becomes available
      * or timeout expiration.
      *
+     * **Timeout behavior specification:**
+     * - timeoutUs > 0: Block for at most timeoutUs microseconds waiting for buffer space.
+     *   Returns SOAPY_SDR_TIMEOUT if buffer space doesn't become available.
+     * - timeoutUs == 0: Non-blocking. Return immediately with what could be written,
+     *   or SOAPY_SDR_TIMEOUT if no buffer space is available.
+     * - timeoutUs < 0: Block indefinitely until buffer space is available.
+     *
      * \param stream the opaque pointer to a stream handle
      * \param buffs an array of void* buffers num chans in size
      * \param numElems the number of elements in each buffer
      * \param flags optional input flags and output flags
      * \param timeNs the buffer's timestamp in nanoseconds
-     * \param timeoutUs the timeout in microseconds
-     * \return the number of elements written per buffer or error
+     * \param timeoutUs the timeout in microseconds (see timeout behavior above)
+     * \return the number of elements written per buffer or error code
+     *         (SOAPY_SDR_TIMEOUT, SOAPY_SDR_UNDERFLOW, SOAPY_SDR_STREAM_ERROR, etc.)
      */
     virtual int writeStream(
         Stream *stream,
@@ -410,6 +577,97 @@ public:
         int &flags,
         long long &timeNs,
         const long timeoutUs = 100000);
+
+    /*******************************************************************
+     * Overflow Recovery API
+     ******************************************************************/
+
+    /*!
+     * Overflow recovery behavior enumeration.
+     * Indicates what action is required when an overflow occurs.
+     */
+    enum OverflowRecovery
+    {
+        OVERFLOW_AUTO_RECOVER,      //!< Driver handles it, just continue reading
+        OVERFLOW_RESET_REQUIRED,    //!< Call resetStream() to recover
+        OVERFLOW_RESTART_REQUIRED,  //!< Full deactivateStream()/activateStream() cycle needed
+        OVERFLOW_UNKNOWN            //!< Legacy/not specified (treat as AUTO_RECOVER)
+    };
+
+    /*!
+     * Get the overflow recovery behavior for this stream.
+     * Applications can use this to determine what action to take
+     * when an overflow (SOAPY_SDR_OVERFLOW) is detected.
+     *
+     * \param stream the opaque pointer to a stream handle
+     * \return the overflow recovery behavior for this stream
+     */
+    virtual OverflowRecovery getOverflowRecovery(Stream *stream) const;
+
+    /*!
+     * Reset stream state after an overflow or error condition.
+     * This is a lightweight recovery mechanism that clears internal
+     * buffers and resets stream state without the overhead of a full
+     * deactivate/activate cycle.
+     *
+     * Call this method when:
+     * - readStream() returns SOAPY_SDR_OVERFLOW and getOverflowRecovery()
+     *   returns OVERFLOW_RESET_REQUIRED
+     * - You want to clear stale data from buffers
+     * - You need to resynchronize after a processing delay
+     *
+     * The default implementation returns SOAPY_SDR_NOT_SUPPORTED,
+     * indicating that a full deactivate/activate cycle is needed.
+     *
+     * \param stream the opaque pointer to a stream handle
+     * \return 0 for success or SOAPY_SDR_NOT_SUPPORTED if not implemented
+     */
+    virtual int resetStream(Stream *stream);
+
+    /*******************************************************************
+     * Stream Statistics API
+     ******************************************************************/
+
+    /*!
+     * Structure containing streaming statistics.
+     */
+    struct StreamStats
+    {
+        uint64_t samplesRead;       //!< Total samples read since activation
+        uint64_t samplesWritten;    //!< Total samples written since activation
+        uint64_t samplesDropped;    //!< Samples lost due to overflow or other issues
+        uint32_t overflowCount;     //!< Number of overflow events
+        uint32_t underflowCount;    //!< Number of underflow events
+        uint32_t errorCount;        //!< Number of other errors
+        double effectiveSampleRate; //!< Measured actual sample rate (0 if unknown)
+        double streamActiveTime;    //!< Seconds since activateStream() (0 if unknown)
+    };
+
+    /*!
+     * Get streaming statistics for the given stream.
+     * This provides insight into stream health including sample counts,
+     * overflow/underflow events, and effective sample rate.
+     *
+     * The default implementation returns all zeros (no stats tracked).
+     *
+     * Statistics should be cheap to query (no blocking).
+     * Counters use 64-bit types to avoid overflow during long-running streams.
+     *
+     * \param stream the opaque pointer to a stream handle
+     * \return StreamStats structure with current statistics
+     */
+    virtual StreamStats getStreamStats(Stream *stream) const;
+
+    /*!
+     * Reset streaming statistics for the given stream.
+     * Clears all counters back to zero. Call this to start fresh
+     * measurements without restarting the stream.
+     *
+     * The default implementation does nothing.
+     *
+     * \param stream the opaque pointer to a stream handle
+     */
+    virtual void resetStreamStats(Stream *stream);
 
     /*******************************************************************
      * Direct buffer access API
@@ -547,12 +805,35 @@ public:
     virtual void setAntenna(const int direction, const size_t channel, const std::string &name);
 
     /*!
+     * Set the selected antenna on a chain with persistence option.
+     * When persistent is true, the driver will re-apply this antenna setting
+     * after operations that might reset it (like activateStream).
+     *
+     * This addresses a common issue where antenna settings are reset by
+     * some drivers during stream activation.
+     *
+     * \param direction the channel direction RX or TX
+     * \param channel an available channel on the device
+     * \param name the name of an available antenna
+     * \param persistent if true, automatically re-apply after stream activation
+     */
+    virtual void setAntennaPersistent(const int direction, const size_t channel, const std::string &name, const bool persistent = true);
+
+    /*!
      * Get the selected antenna on a chain.
      * \param direction the channel direction RX or TX
      * \param channel an available channel on the device
      * \return the name of an available antenna
      */
     virtual std::string getAntenna(const int direction, const size_t channel) const;
+
+    /*!
+     * Check if antenna persistence is enabled for a channel.
+     * \param direction the channel direction RX or TX
+     * \param channel an available channel on the device
+     * \return true if antenna persistence is enabled
+     */
+    virtual bool getAntennaPersistent(const int direction, const size_t channel) const;
 
     /*******************************************************************
      * Frontend corrections API
@@ -1308,6 +1589,127 @@ public:
      */
     template <typename Type>
     Type readSetting(const int direction, const size_t channel, const std::string &key) const;
+
+    /*******************************************************************
+     * Setting Verification API
+     ******************************************************************/
+
+    /*!
+     * Structure containing setting verification result.
+     */
+    struct SettingVerification
+    {
+        bool success;           //!< True if setting was applied correctly
+        std::string requested;  //!< The value that was requested
+        std::string actual;     //!< The actual value read back
+        std::string message;    //!< Human-readable message about the verification
+    };
+
+    /*!
+     * Structure containing setting validation result (pre-apply check).
+     */
+    struct SettingValidation
+    {
+        bool valid;                 //!< True if the value would be accepted
+        std::string normalizedValue;//!< The value after normalization (e.g., clamping)
+        std::string message;        //!< Human-readable validation message
+        std::vector<std::string> allowedValues; //!< List of allowed values (for enum types)
+        Range allowedRange;         //!< Allowed range (for numeric types)
+    };
+
+    /*!
+     * Validate a setting value before applying it.
+     * This allows applications to check if a value is valid without
+     * actually changing the device state.
+     *
+     * \param key the setting identifier
+     * \param value the proposed setting value
+     * \return SettingValidation with validity status and constraints
+     */
+    virtual SettingValidation validateSetting(const std::string &key, const std::string &value) const;
+
+    /*!
+     * Validate a channel setting value before applying it.
+     *
+     * \param direction the channel direction RX or TX
+     * \param channel an available channel on the device
+     * \param key the setting identifier
+     * \param value the proposed setting value
+     * \return SettingValidation with validity status and constraints
+     */
+    virtual SettingValidation validateSetting(const int direction, const size_t channel, const std::string &key, const std::string &value) const;
+
+    /*!
+     * Write and verify a global setting.
+     * Writes the setting then reads it back to verify it was applied.
+     *
+     * \param key the setting identifier
+     * \param value the setting value
+     * \return SettingVerification with success status and actual value
+     */
+    virtual SettingVerification writeSettingVerified(const std::string &key, const std::string &value);
+
+    /*!
+     * Write and verify a channel setting.
+     * Writes the setting then reads it back to verify it was applied.
+     *
+     * \param direction the channel direction RX or TX
+     * \param channel an available channel on the device
+     * \param key the setting identifier
+     * \param value the setting value
+     * \return SettingVerification with success status and actual value
+     */
+    virtual SettingVerification writeSettingVerified(const int direction, const size_t channel, const std::string &key, const std::string &value);
+
+    /*!
+     * Set frequency with verification.
+     * Sets the frequency then reads it back to verify within tolerance.
+     *
+     * \param direction the channel direction RX or TX
+     * \param channel an available channel on the device
+     * \param frequency the center frequency in Hz
+     * \param args optional tuning arguments
+     * \param toleranceHz acceptable difference between requested and actual (default 1 Hz)
+     * \return SettingVerification with success status, requested and actual frequency
+     */
+    virtual SettingVerification setFrequencyVerified(
+        const int direction,
+        const size_t channel,
+        const double frequency,
+        const Kwargs &args = Kwargs(),
+        const double toleranceHz = 1.0);
+
+    /*!
+     * Set sample rate with verification.
+     * Sets the sample rate then reads it back to verify within tolerance.
+     *
+     * \param direction the channel direction RX or TX
+     * \param channel an available channel on the device
+     * \param rate the sample rate in samples per second
+     * \param tolerancePercent acceptable percentage difference (default 0.01 = 1%)
+     * \return SettingVerification with success status, requested and actual rate
+     */
+    virtual SettingVerification setSampleRateVerified(
+        const int direction,
+        const size_t channel,
+        const double rate,
+        const double tolerancePercent = 0.01);
+
+    /*!
+     * Set gain with verification.
+     * Sets the gain then reads it back to verify within tolerance.
+     *
+     * \param direction the channel direction RX or TX
+     * \param channel an available channel on the device
+     * \param gain the gain value in dB
+     * \param tolerancedB acceptable difference in dB (default 0.1)
+     * \return SettingVerification with success status, requested and actual gain
+     */
+    virtual SettingVerification setGainVerified(
+        const int direction,
+        const size_t channel,
+        const double gain,
+        const double tolerancedB = 0.1);
 
     /*******************************************************************
      * GPIO API

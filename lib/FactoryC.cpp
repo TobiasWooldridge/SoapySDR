@@ -26,6 +26,22 @@ SoapySDRKwargs *SoapySDRDevice_enumerateStrArgs(const char *args, size_t *length
     __SOAPY_SDR_C_CATCH_RET(nullptr);
 }
 
+SoapySDRKwargs *SoapySDRDevice_enumerateWithTimeout(const SoapySDRKwargs *args, const long timeoutUs, size_t *length)
+{
+    *length = 0;
+    __SOAPY_SDR_C_TRY
+    return toKwargsList(SoapySDR::Device::enumerate(toKwargs(args), timeoutUs), length);
+    __SOAPY_SDR_C_CATCH_RET(nullptr);
+}
+
+SoapySDRKwargs *SoapySDRDevice_enumerateStrArgsWithTimeout(const char *args, const long timeoutUs, size_t *length)
+{
+    *length = 0;
+    __SOAPY_SDR_C_TRY
+    return toKwargsList(SoapySDR::Device::enumerate((args==nullptr)?"":args, timeoutUs), length);
+    __SOAPY_SDR_C_CATCH_RET(nullptr);
+}
+
 SoapySDRDevice *SoapySDRDevice_make(const SoapySDRKwargs *args)
 {
     __SOAPY_SDR_C_TRY
@@ -37,6 +53,20 @@ SoapySDRDevice *SoapySDRDevice_makeStrArgs(const char *args)
 {
     __SOAPY_SDR_C_TRY
     return (SoapySDRDevice *)SoapySDR::Device::make((args==nullptr)?"":args);
+    __SOAPY_SDR_C_CATCH_RET(nullptr);
+}
+
+SoapySDRDevice *SoapySDRDevice_makeWithTimeout(const SoapySDRKwargs *args, const long timeoutUs)
+{
+    __SOAPY_SDR_C_TRY
+    return (SoapySDRDevice *)SoapySDR::Device::make(toKwargs(args), timeoutUs);
+    __SOAPY_SDR_C_CATCH_RET(nullptr);
+}
+
+SoapySDRDevice *SoapySDRDevice_makeStrArgsWithTimeout(const char *args, const long timeoutUs)
+{
+    __SOAPY_SDR_C_TRY
+    return (SoapySDRDevice *)SoapySDR::Device::make((args==nullptr)?"":args, timeoutUs);
     __SOAPY_SDR_C_CATCH_RET(nullptr);
 }
 
